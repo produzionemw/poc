@@ -783,41 +783,12 @@ Restituisci SOLO il JSON valido."""
 
 
 def extract_info_with_gemini(text, pdf_path=None):
-    """Estrae informazioni strutturate dal testo usando Google Gemini (free tier)."""
-    try:
-        api_key = os.environ.get('GEMINI_API_KEY') or os.getenv('GEMINI_API_KEY')
+    """Estrae informazioni strutturate dal testo usando Groq (primario) o Gemini (fallback)."""
+    import requests as _requests
 
-        if not api_key:
-            return {
-                "error": (
-                    "GEMINI_API_KEY mancante. In backend/.env imposta GEMINI_API_KEY= "
-                    "con la chiave da https://aistudio.google.com/app/apikey"
-                ),
-                "raw_text": text,
-            }
+    text_limited = text[:80000] if len(text) > 80000 else text
 
-        # Prima strategia: estrazione da testo (1 chiamata sola, più stabile)
-        # La visione viene usata solo se il testo è troppo corto (<200 caratteri)
-        if pdf_path and len(text.strip()) < 200:
-            print("Testo estratto insufficiente, tentativo con visione Gemini...")
-            vision_result = extract_info_with_gemini_vision(pdf_path, api_key)
-            if vision_result:
-                try:
-                    parsed = json.loads(vision_result)
-                    print("✅ Estrazione con visione completata con successo!")
-                    return parsed
-                except json.JSONDecodeError:
-                    cleaned = repair_json(vision_result)
-                    try:
-                        return json.loads(cleaned)
-                    except Exception:
-                        print("Riparazione visione fallita, continuo con testo...")
-        else:
-            print("Estrazione da testo con Gemini...")
-
-        text_limited = text[:80000] if len(text) > 80000 else text
-
-        prompt = f"""Estrai tutte le informazioni rilevanti da questo preventivo e restituiscile in formato JSON valido.
+    prompt = f"""Estrai tutte le informazioni rilevanti da questo preventivo e restituiscile in formato JSON valido.
 
 REGOLE STRETTE PER IL JSON:
 1. Usa SOLO virgolette doppie (") per le stringhe
@@ -834,89 +805,92 @@ Testo del preventivo:
 
 Restituisci SOLO il JSON valido."""
 
-        import requests as _requests
-        last_error = None
-        for api_ver, model_name in [
-            ('v1', 'gemini-1.5-flash'),
-            ('v1beta', 'gemini-2.0-flash'),
-            ('v1', 'gemini-1.5-flash-8b'),
-            ('v1beta', 'gemini-1.5-flash'),
-        ]:
-            url = f'https://generativelanguage.googleapis.com/{api_ver}/models/{model_name}:generateContent'
-            payload = {
-                'contents': [{'parts': [{'text': 'Sei un assistente che estrae informazioni strutturate da preventivi. Restituisci SEMPRE e SOLO JSON valido, senza testo aggiuntivo.\n\n' + prompt}]}],
-            }
-            try:
-                resp = _requests.post(url, params={'key': api_key}, json=payload, timeout=55)
-                if resp.status_code == 200:
-                    rj = resp.json()
-                    content = rj['candidates'][0]['content']['parts'][0]['text'].strip()
-                    print(f"✅ Estrazione con {api_ver}/{model_name} completata")
-                    last_error = None
-                    break
-                else:
-                    last_error = f"{resp.status_code} {resp.text[:150]}"
-                    print(f"⚠️ {api_ver}/{model_name}: {last_error}")
-                    continue
-            except Exception as e:
-                last_error = str(e)
-                print(f"⚠️ {api_ver}/{model_name} eccezione: {last_error[:100]}")
-                continue
-        if last_error:
-            return {
-                "error": f"Tutti i modelli Gemini hanno fallito. Ultimo errore: {last_error[:300]}",
-                "error_code": "quota_exceeded",
-                "raw_text": text,
-            }
+    system_msg = "Sei un assistente che estrae informazioni strutturate da preventivi. Restituisci SEMPRE e SOLO JSON valido, senza testo aggiuntivo."
 
-        if content.startswith("```json"):
-            content = content[7:]
-        elif content.startswith("```"):
-            content = content[3:]
-        if content.endswith("```"):
-            content = content[:-3]
-        content = content.strip()
-
-        json_start = content.find('{')
-        json_end = content.rfind('}') + 1
-        if json_start != -1 and json_end > json_start:
-            content = content[json_start:json_end]
-
+    # --- Tentativo 1: Groq (gratuito, senza problemi di quota) ---
+    groq_key = os.environ.get('GROQ_API_KEY')
+    if groq_key:
         try:
-            return json.loads(content)
-        except json.JSONDecodeError as e:
-            print(f"Errore parsing JSON iniziale: {e}")
-            cleaned = repair_json(content)
-            try:
-                return json.loads(cleaned)
-            except json.JSONDecodeError as e2:
-                print(f"Errore parsing JSON dopo riparazione: {e2}")
+            resp = _requests.post(
+                'https://api.groq.com/openai/v1/chat/completions',
+                headers={'Authorization': f'Bearer {groq_key}', 'Content-Type': 'application/json'},
+                json={
+                    'model': 'llama-3.3-70b-versatile',
+                    'messages': [
+                        {'role': 'system', 'content': system_msg},
+                        {'role': 'user', 'content': prompt},
+                    ],
+                    'temperature': 0.1,
+                },
+                timeout=55,
+            )
+            if resp.status_code == 200:
+                content = resp.json()['choices'][0]['message']['content'].strip()
+                print("✅ Estrazione con Groq completata")
+                # parsing JSON
+                if content.startswith("```"):
+                    content = content.split("```")[1]
+                    if content.startswith("json"):
+                        content = content[4:]
+                content = content.strip()
+                j0 = content.find('{'); j1 = content.rfind('}') + 1
+                if j0 != -1 and j1 > j0:
+                    content = content[j0:j1]
                 try:
-                    if hasattr(e2, 'pos') and e2.pos > 0:
-                        partial_json = cleaned[:e2.pos]
-                        open_count = partial_json.count('{') - partial_json.count('}')
-                        if open_count > 0:
-                            partial_json += '}' * open_count
+                    return json.loads(content)
+                except json.JSONDecodeError:
+                    cleaned = repair_json(content)
+                    try:
+                        return json.loads(cleaned)
+                    except Exception:
+                        pass
+            else:
+                print(f"⚠️ Groq errore {resp.status_code}: {resp.text[:100]}")
+        except Exception as e:
+            print(f"⚠️ Groq eccezione: {str(e)[:100]}")
+
+    # --- Tentativo 2: Gemini via REST (fallback) ---
+    gemini_key = os.environ.get('GEMINI_API_KEY') or os.getenv('GEMINI_API_KEY')
+    if gemini_key:
+        gemini_prompt = system_msg + "\n\n" + prompt
+        for api_ver, model_name in [
+            ('v1beta', 'gemini-2.0-flash'),
+            ('v1beta', 'gemini-2.0-flash-lite'),
+            ('v1', 'gemini-1.5-flash-latest'),
+            ('v1beta', 'gemini-1.5-flash-latest'),
+        ]:
+            try:
+                url = f'https://generativelanguage.googleapis.com/{api_ver}/models/{model_name}:generateContent'
+                resp = _requests.post(
+                    url,
+                    params={'key': gemini_key},
+                    json={'contents': [{'parts': [{'text': gemini_prompt}]}]},
+                    timeout=50,
+                )
+                if resp.status_code == 200:
+                    content = resp.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+                    print(f"✅ Estrazione con Gemini {api_ver}/{model_name} completata")
+                    j0 = content.find('{'); j1 = content.rfind('}') + 1
+                    if j0 != -1 and j1 > j0:
+                        content = content[j0:j1]
+                    try:
+                        return json.loads(content)
+                    except json.JSONDecodeError:
+                        cleaned = repair_json(content)
                         try:
-                            return json.loads(partial_json)
+                            return json.loads(cleaned)
                         except Exception:
                             pass
-                except Exception:
-                    pass
+                else:
+                    print(f"⚠️ Gemini {api_ver}/{model_name}: {resp.status_code} {resp.text[:80]}")
+            except Exception as e:
+                print(f"⚠️ Gemini {api_ver}/{model_name} eccezione: {str(e)[:80]}")
 
-                print("Tentativo correzione JSON con Gemini...")
-                corrected_json = ask_gemini_to_fix_json(cleaned, api_key)
-                if corrected_json:
-                    try:
-                        return json.loads(corrected_json)
-                    except json.JSONDecodeError as e3:
-                        print(f"JSON corretto da Gemini ancora non valido: {e3}")
-
-                print("Usando estrazione fallback con regex")
-                return extract_fallback_info(text, content)
-    except Exception as e:
-        print(f"Errore nell'estrazione con Gemini: {e}")
-        return {"error": str(e), "raw_text": text}
+    return {
+        "error": "Nessun servizio AI disponibile. Imposta GROQ_API_KEY su Render (gratuito: console.groq.com).",
+        "error_code": "no_ai_service",
+        "raw_text": text,
+    }
 
 
 # Alias retro-compatibilità interna
