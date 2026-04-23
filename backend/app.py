@@ -73,7 +73,7 @@ else:
     print(f"Percorso .env cercato: {env_path_abs}")
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=False)
 
 # Configurazione
 UPLOAD_FOLDER = 'uploads'

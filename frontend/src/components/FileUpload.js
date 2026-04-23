@@ -46,7 +46,13 @@ function FileUpload({ onUploadSuccess }) {
         body: formData,
       });
 
-      const data = await response.json();
+      let data;
+      try {
+        data = await response.json();
+      } catch {
+        setError(`Errore del server (HTTP ${response.status}). Riprova tra qualche secondo.`);
+        return;
+      }
 
       if (response.ok) {
         setMessage('Preventivo caricato con successo! Le informazioni sono state estratte.');
