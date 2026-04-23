@@ -24,6 +24,7 @@ function PreventiviList({ preventivi, onPreventivoSelect, selectedId }) {
     if (showModal && selectedPreventivo) {
       loadFullPreventivo(selectedPreventivo.id);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showModal, selectedPreventivo]);
 
   const filteredPreventivi = useMemo(() => {

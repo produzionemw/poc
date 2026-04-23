@@ -20,6 +20,7 @@ function PlanningView() {
     if (config.num_operatori) {
       loadPlanning();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config]);
 
   const loadPlanningConfig = async () => {
