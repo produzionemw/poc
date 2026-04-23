@@ -1,0 +1,20 @@
+{
+  "fields": [
+    {
+      "enabled": true,
+      "name": "cliente",
+      "weight": 1
+    },
+    {
+      "enabled": true,
+      "name": "modello_struttura",
+      "weight": 1
+    },
+    {
+      "name": "materiale",
+      "weight": 1,
+      "enabled": true
+    }
+  ],
+  "similarity_threshold": 0.3
+}

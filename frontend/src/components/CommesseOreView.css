@@ -1,0 +1,144 @@
+.commesse-ore-view {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.commesse-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.commesse-ore-view .btn-primary {
+  padding: 0.6rem 1.2rem;
+  background: #2c3e50;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.commesse-ore-view .btn-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.commesse-ore-view .btn-secondary {
+  padding: 0.6rem 1.2rem;
+  background: #e9ecef;
+  color: #2c3e50;
+  border: 1px solid #ced4da;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.commesse-ore-view .success-msg {
+  color: #2e7d32;
+  margin-top: 10px;
+}
+
+.stats-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  justify-content: center;
+}
+
+.stat-box {
+  flex: 1;
+  min-width: 160px;
+  text-align: center;
+  padding: 16px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  border: 1px solid #dee2e6;
+}
+
+.stat-box.warn {
+  border-color: #ffc107;
+  background: #fff8e1;
+}
+
+.stat-val {
+  display: block;
+  font-size: 1.8rem;
+  font-weight: 700;
+  color: #2c3e50;
+}
+
+.stat-lbl {
+  font-size: 0.85rem;
+  color: #6c757d;
+}
+
+.table-wrap {
+  overflow-x: auto;
+  margin-top: 12px;
+}
+
+.data-table,
+.match-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.data-table th,
+.data-table td,
+.match-table th,
+.match-table td {
+  border: 1px solid #dee2e6;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.data-table th,
+.match-table th {
+  background: #2c3e50;
+  color: #fff;
+}
+
+.match-table .fn {
+  max-width: 280px;
+  word-break: break-all;
+}
+
+.match-mapped {
+  background: #e8f5e9;
+}
+
+.match-mapped_no_ore {
+  background: #fff3e0;
+}
+
+.match-ambiguous_mapping {
+  background: #e3f2fd;
+}
+
+.match-unique {
+  background: #e8f5e9;
+}
+
+.match-ambiguous {
+  background: #fff8e1;
+}
+
+.match-none,
+.match-unparsed {
+  background: #fce4ec;
+}
+
+.commesse-ore-view .muted {
+  color: #6c757d;
+  font-size: 0.95rem;
+}
+
+.commesse-ore-view code {
+  background: #eef1f4;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.85em;
+}

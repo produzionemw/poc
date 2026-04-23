@@ -1,0 +1,4 @@
+Backup estrazioni — 2026-04-14T08:36:31.690040
+Salvati: 557
+Saltati (JSON non valido): 0
+Cartella: C:\Users\Asus\workspace\extra\MetalWorkingPOC\backend\backup_estrazioni
