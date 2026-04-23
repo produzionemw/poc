@@ -783,8 +783,10 @@ def extract_info_with_gemini(text, pdf_path=None):
                 "raw_text": text,
             }
 
-        if pdf_path:
-            print("Tentativo estrazione con visione (Gemini) dal PDF...")
+        # Prima strategia: estrazione da testo (1 chiamata sola, più stabile)
+        # La visione viene usata solo se il testo è troppo corto (<200 caratteri)
+        if pdf_path and len(text.strip()) < 200:
+            print("Testo estratto insufficiente, tentativo con visione Gemini...")
             vision_result = extract_info_with_gemini_vision(pdf_path, api_key)
             if vision_result:
                 try:
@@ -792,14 +794,13 @@ def extract_info_with_gemini(text, pdf_path=None):
                     print("✅ Estrazione con visione completata con successo!")
                     return parsed
                 except json.JSONDecodeError:
-                    print("JSON dalla visione non valido, uso riparazione...")
                     cleaned = repair_json(vision_result)
                     try:
                         return json.loads(cleaned)
                     except Exception:
-                        print("Riparazione fallita, uso estrazione da testo...")
-            else:
-                print("Visione non disponibile, uso estrazione da testo...")
+                        print("Riparazione visione fallita, continuo con testo...")
+        else:
+            print("Estrazione da testo con Gemini...")
 
         text_limited = text[:80000] if len(text) > 80000 else text
 
