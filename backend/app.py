@@ -23,7 +23,8 @@ import re
 import base64
 from werkzeug.utils import secure_filename
 import PyPDF2
-import google.generativeai as genai
+from google import genai
+from google.genai import types as genai_types
 from dotenv import load_dotenv
 import psycopg2
 import psycopg2.extras
@@ -542,15 +543,17 @@ def ask_gemini_to_fix_json(broken_json, api_key):
 JSON da correggere:
 {error_context}"""
 
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(
-            'gemini-1.5-flash',
-            system_instruction=(
-                "Sei un esperto nel correggere JSON malformati. "
-                "Restituisci SOLO il JSON corretto, senza markdown, senza spiegazioni."
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=fix_prompt,
+            config=genai_types.GenerateContentConfig(
+                system_instruction=(
+                    "Sei un esperto nel correggere JSON malformati. "
+                    "Restituisci SOLO il JSON corretto, senza markdown, senza spiegazioni."
+                ),
             ),
         )
-        response = model.generate_content(fix_prompt)
         fixed_content = response.text.strip()
 
         if fixed_content.startswith("```json"):
@@ -694,11 +697,19 @@ def image_to_base64(image):
 
 
 def image_to_base64_raw_png(image):
-    """Base64 puro PNG per API Anthropic (vision)."""
+    """Base64 puro PNG (legacy)."""
     import io
     buffered = io.BytesIO()
     image.save(buffered, format="PNG")
     return base64.b64encode(buffered.getvalue()).decode()
+
+
+def _pil_to_bytes(image):
+    """Converte PIL Image in bytes PNG."""
+    import io
+    buffered = io.BytesIO()
+    image.save(buffered, format="PNG")
+    return buffered.getvalue()
 
 
 def extract_info_with_gemini_vision(pdf_path, api_key):
@@ -728,10 +739,15 @@ caratteristiche e dimensioni, materiali, prezzi, condizioni, note.
 
 Restituisci SOLO il JSON valido."""
 
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        content = [prompt] + list(images_to_process)
-        response = model.generate_content(content)
+        client = genai.Client(api_key=api_key)
+        content_parts = [prompt] + [
+            genai_types.Part.from_bytes(data=_pil_to_bytes(img), mime_type='image/png')
+            for img in images_to_process
+        ]
+        response = client.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=content_parts,
+        )
         result = response.text
         print("✅ Estrazione con visione Gemini riuscita")
         return result
@@ -792,17 +808,19 @@ Testo del preventivo:
 
 Restituisci SOLO il JSON valido."""
 
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(
-            'gemini-1.5-flash',
-            system_instruction=(
-                "Sei un assistente che estrae informazioni strutturate da preventivi. "
-                "Restituisci SEMPRE e SOLO JSON valido, senza testo aggiuntivo."
-            ),
-        )
+        client = genai.Client(api_key=api_key)
 
         try:
-            response = model.generate_content(prompt)
+            response = client.models.generate_content(
+                model='gemini-1.5-flash',
+                contents=prompt,
+                config=genai_types.GenerateContentConfig(
+                    system_instruction=(
+                        "Sei un assistente che estrae informazioni strutturate da preventivi. "
+                        "Restituisci SEMPRE e SOLO JSON valido, senza testo aggiuntivo."
+                    ),
+                ),
+            )
             content = response.text.strip()
             print("✅ Estrazione con Gemini completata")
         except Exception as e:
