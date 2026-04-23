@@ -844,7 +844,7 @@ Restituisci SOLO il JSON valido."""
         ]:
             url = f'https://generativelanguage.googleapis.com/{api_ver}/models/{model_name}:generateContent'
             payload = {
-                'system_instruction': {'parts': [{'text': 'Sei un assistente che estrae informazioni strutturate da preventivi. Restituisci SEMPRE e SOLO JSON valido, senza testo aggiuntivo.'}]},
+                'systemInstruction': {'parts': [{'text': 'Sei un assistente che estrae informazioni strutturate da preventivi. Restituisci SEMPRE e SOLO JSON valido, senza testo aggiuntivo.'}]},
                 'contents': [{'parts': [{'text': prompt}]}],
             }
             try:
