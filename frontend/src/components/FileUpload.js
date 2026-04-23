@@ -72,7 +72,7 @@ function FileUpload({ onUploadSuccess }) {
       <h2>Carica Preventivo PDF</h2>
       <p className="description">
         Carica un file PDF contenente un preventivo. Il sistema estrarrà automaticamente
-        tutte le informazioni utilizzando Claude (Anthropic).
+        tutte le informazioni utilizzando Gemini AI (Google).
       </p>
 
       <div className="upload-area">

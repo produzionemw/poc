@@ -927,18 +927,14 @@ def upload_file():
         # Salva il file
         filename = secure_filename(file.filename)
         
-        # Controlla se il preventivo esiste già
+        # Se il preventivo esiste già, elimina il vecchio e riprocessa
         existing = check_preventivo_exists(filename)
         if existing:
-            return jsonify({
-                'error': f'Preventivo già presente: {filename}',
-                'existing_preventivo': {
-                    'id': existing['id'],
-                    'filename': existing['filename'],
-                    'upload_date': existing['upload_date']
-                },
-                'duplicate': True
-            }), 409  # 409 Conflict
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM preventivi WHERE id = %s', (existing['id'],))
+            conn.commit()
+            conn.close()
         
         unique_filename = f"{uuid.uuid4()}_{filename}"
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
