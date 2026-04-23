@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { API_BASE } from './apiConfig';
 import './App.css';
+import Login, { isAuthenticated } from './components/Login';
 import FileUpload from './components/FileUpload';
 import PreventiviList from './components/PreventiviList';
 import SimilarityView from './components/SimilarityView';
@@ -14,10 +15,13 @@ import FattoreKView from './components/FattoreKView';
 const SHOW_PLANNING_MENU = false;
 
 function App() {
+  const [auth, setAuth] = useState(isAuthenticated());
   const [preventivi, setPreventivi] = useState([]);
   const [selectedPreventivo, setSelectedPreventivo] = useState(null);
   const [similarPreventivi, setSimilarPreventivi] = useState([]);
   const [loading, setLoading] = useState(false);
+
+  if (!auth) return <Login onLogin={() => setAuth(true)} />;
   const [activeTab, setActiveTab] = useState('upload');
   const [config, setConfig] = useState(null);
 
