@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { API_BASE } from './apiConfig';
 import './App.css';
 import FileUpload from './components/FileUpload';
 import PreventiviList from './components/PreventiviList';
@@ -27,7 +28,7 @@ function App() {
 
   const loadPreventivi = async () => {
     try {
-      const response = await fetch('/api/preventivi');
+      const response = await fetch(`${API_BASE}/api/preventivi`);
       const data = await response.json();
       if (data.preventivi) {
         setPreventivi(data.preventivi);
@@ -39,7 +40,7 @@ function App() {
 
   const loadConfig = async () => {
     try {
-      const response = await fetch('/api/config');
+      const response = await fetch(`${API_BASE}/api/config`);
       const data = await response.json();
       setConfig(data);
     } catch (error) {
@@ -55,7 +56,7 @@ function App() {
     setSelectedPreventivo(preventivoId);
     setLoading(true);
     try {
-      const response = await fetch(`/api/preventivi/${preventivoId}/similar`);
+      const response = await fetch(`${API_BASE}/api/preventivi/${preventivoId}/similar`);
       const data = await response.json();
       if (data.similar_preventivi) {
         setSimilarPreventivi(data.similar_preventivi);
@@ -69,7 +70,7 @@ function App() {
 
   const handleConfigUpdate = async (newConfig) => {
     try {
-      const response = await fetch('/api/config', {
+      const response = await fetch(`${API_BASE}/api/config`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

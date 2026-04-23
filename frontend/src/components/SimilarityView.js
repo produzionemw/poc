@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import { api as axios } from '../apiConfig';
 import './SimilarityView.css';
 
 function KBadgeInline({ preventivoId }) {

@@ -4,9 +4,17 @@ Legame offerta (nr. preventivo) ↔ commessa da Excel gestionale (elenco commess
 from __future__ import annotations
 
 import os
-import sqlite3
 from datetime import datetime, timezone
 from typing import Any
+
+import psycopg2
+import psycopg2.extras
+
+
+def _get_db_conn():
+    url = os.environ.get('DATABASE_URL', '')
+    conn = psycopg2.connect(url, connection_factory=psycopg2.extras.RealDictConnection)
+    return conn
 
 import openpyxl
 
@@ -78,7 +86,7 @@ def import_mapping_to_sqlite(
     rows: list[dict[str, Any]],
     source_file: str,
 ) -> dict[str, Any]:
-    conn = sqlite3.connect(db_path)
+    conn = _get_db_conn()
     cur = conn.cursor()
     cur.execute("DELETE FROM offerta_commessa_map")
     now = datetime.now(timezone.utc).isoformat()
@@ -88,7 +96,7 @@ def import_mapping_to_sqlite(
             INSERT INTO offerta_commessa_map (
                 nr_preventivo, nr_commessa, ragione_sociale,
                 riferimento_offerta, data_doc, source_file, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 r["nr_preventivo"],
@@ -101,14 +109,14 @@ def import_mapping_to_sqlite(
             ),
         )
     conn.commit()
-    n = cur.execute("SELECT COUNT(*) FROM offerta_commessa_map").fetchone()[0]
+    cur.execute("SELECT COUNT(*) AS cnt FROM offerta_commessa_map")
+    n = cur.fetchone()['cnt']
     conn.close()
     return {"imported": len(rows), "stored": n, "source_file": source_file}
 
 
 def mapping_by_preventivo(db_path: str) -> dict[int, list[dict[str, Any]]]:
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    conn = _get_db_conn()
     cur = conn.cursor()
     cur.execute(
         """
@@ -125,8 +133,7 @@ def mapping_by_preventivo(db_path: str) -> dict[int, list[dict[str, Any]]]:
 
 
 def commesse_ore_by_nr(db_path: str) -> dict[str, dict[str, Any]]:
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    conn = _get_db_conn()
     cur = conn.cursor()
     cur.execute(
         """

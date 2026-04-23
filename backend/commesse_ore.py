@@ -7,9 +7,17 @@ from __future__ import annotations
 
 import os
 import re
-import sqlite3
 from datetime import datetime, timezone
 from typing import Any
+
+import psycopg2
+import psycopg2.extras
+
+
+def _get_db_conn():
+    url = os.environ.get('DATABASE_URL', '')
+    conn = psycopg2.connect(url, connection_factory=psycopg2.extras.RealDictConnection)
+    return conn
 
 import openpyxl
 
@@ -189,7 +197,7 @@ def import_to_sqlite(
     rows: list[dict[str, Any]],
     source_file: str,
 ) -> dict[str, Any]:
-    conn = sqlite3.connect(db_path)
+    conn = _get_db_conn()
     cur = conn.cursor()
     cur.execute("DELETE FROM commesse_ore")
     now = datetime.now(timezone.utc).isoformat()
@@ -200,7 +208,7 @@ def import_to_sqlite(
                 nr_commessa, cliente, cliente_norm,
                 ore_imba, ore_nest, ore_pieg, ore_prod, ore_prog, ore_sald, ore_totale,
                 source_file, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 r["nr_commessa"],
@@ -218,7 +226,8 @@ def import_to_sqlite(
             ),
         )
     conn.commit()
-    n = cur.execute("SELECT COUNT(*) FROM commesse_ore").fetchone()[0]
+    cur.execute("SELECT COUNT(*) AS cnt FROM commesse_ore")
+    n = cur.fetchone()['cnt']
     conn.close()
     return {"imported": len(rows), "stored": n, "source_file": source_file}
 
@@ -415,8 +424,7 @@ def match_preventivi_filenames(
 
 
 def rows_grouped_by_cliente_norm(db_path: str) -> dict[str, list[dict[str, Any]]]:
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    conn = _get_db_conn()
     cur = conn.cursor()
     cur.execute(
         """

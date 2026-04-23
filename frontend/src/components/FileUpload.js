@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { API_BASE } from '../apiConfig';
 import './FileUpload.css';
 
 function FileUpload({ onUploadSuccess }) {
@@ -40,7 +41,7 @@ function FileUpload({ onUploadSuccess }) {
     formData.append('file', file);
 
     try {
-      const response = await fetch('/api/upload', {
+      const response = await fetch(`${API_BASE}/api/upload`, {
         method: 'POST',
         body: formData,
       });
