@@ -21,14 +21,15 @@ function App() {
   const [similarPreventivi, setSimilarPreventivi] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  if (!auth) return <Login onLogin={() => setAuth(true)} />;
   const [activeTab, setActiveTab] = useState('upload');
   const [config, setConfig] = useState(null);
 
   useEffect(() => {
+    if (!auth) return;
     loadPreventivi();
     loadConfig();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auth]);
 
   const loadPreventivi = async () => {
     try {
@@ -92,6 +93,8 @@ function App() {
       console.error('Errore nell\'aggiornamento configurazione:', error);
     }
   };
+
+  if (!auth) return <Login onLogin={() => setAuth(true)} />;
 
   return (
     <div className="App">
