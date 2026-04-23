@@ -545,7 +545,7 @@ JSON da correggere:
 
         client = genai.Client(api_key=api_key)
         response = client.models.generate_content(
-            model='gemini-1.5-flash',
+            model='gemini-2.0-flash',
             contents=fix_prompt,
             config=genai_types.GenerateContentConfig(
                 system_instruction=(
@@ -745,7 +745,7 @@ Restituisci SOLO il JSON valido."""
             for img in images_to_process
         ]
         response = client.models.generate_content(
-            model='gemini-1.5-flash',
+            model='gemini-2.0-flash',
             contents=content_parts,
         )
         result = response.text
@@ -812,7 +812,7 @@ Restituisci SOLO il JSON valido."""
 
         try:
             response = client.models.generate_content(
-                model='gemini-1.5-flash',
+                model='gemini-2.0-flash',
                 contents=prompt,
                 config=genai_types.GenerateContentConfig(
                     system_instruction=(
