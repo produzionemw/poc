@@ -744,13 +744,25 @@ Restituisci SOLO il JSON valido."""
             genai_types.Part.from_bytes(data=_pil_to_bytes(img), mime_type='image/png')
             for img in images_to_process
         ]
-        response = client.models.generate_content(
-            model='gemini-2.0-flash',
-            contents=content_parts,
-        )
-        result = response.text
-        print("✅ Estrazione con visione Gemini riuscita")
-        return result
+        for attempt in range(3):
+            try:
+                response = client.models.generate_content(
+                    model='gemini-2.0-flash',
+                    contents=content_parts,
+                )
+                print("✅ Estrazione con visione Gemini riuscita")
+                return response.text
+            except Exception as e:
+                error_str = str(e)
+                if "429" in error_str or "quota" in error_str.lower():
+                    wait = 20 * (attempt + 1)
+                    print(f"⏳ Quota Gemini Vision, attendo {wait}s (tentativo {attempt+1}/3)...")
+                    import time as _time
+                    _time.sleep(wait)
+                else:
+                    print(f"Errore visione Gemini: {e}")
+                    return None
+        return None
 
     except Exception as e:
         print(f"Errore nell'estrazione con visione Gemini: {e}")
@@ -810,28 +822,39 @@ Restituisci SOLO il JSON valido."""
 
         client = genai.Client(api_key=api_key)
 
-        try:
-            response = client.models.generate_content(
-                model='gemini-2.0-flash',
-                contents=prompt,
-                config=genai_types.GenerateContentConfig(
-                    system_instruction=(
-                        "Sei un assistente che estrae informazioni strutturate da preventivi. "
-                        "Restituisci SEMPRE e SOLO JSON valido, senza testo aggiuntivo."
+        last_error = None
+        for attempt in range(3):
+            try:
+                response = client.models.generate_content(
+                    model='gemini-2.0-flash',
+                    contents=prompt,
+                    config=genai_types.GenerateContentConfig(
+                        system_instruction=(
+                            "Sei un assistente che estrae informazioni strutturate da preventivi. "
+                            "Restituisci SEMPRE e SOLO JSON valido, senza testo aggiuntivo."
+                        ),
                     ),
-                ),
-            )
-            content = response.text.strip()
-            print("✅ Estrazione con Gemini completata")
-        except Exception as e:
-            error_str = str(e)
-            if "429" in error_str or "quota" in error_str.lower():
-                return {
-                    "error": "Quota API Gemini superata. Riprova tra qualche minuto.",
-                    "error_code": "quota_exceeded",
-                    "raw_text": text,
-                }
-            return {"error": f"Errore Gemini: {error_str}", "raw_text": text}
+                )
+                content = response.text.strip()
+                print("✅ Estrazione con Gemini completata")
+                last_error = None
+                break
+            except Exception as e:
+                error_str = str(e)
+                last_error = error_str
+                if "429" in error_str or "quota" in error_str.lower():
+                    wait = 20 * (attempt + 1)
+                    print(f"⏳ Quota Gemini superata, attendo {wait}s (tentativo {attempt+1}/3)...")
+                    import time as _time
+                    _time.sleep(wait)
+                else:
+                    return {"error": f"Errore Gemini: {error_str}", "raw_text": text}
+        if last_error:
+            return {
+                "error": "Quota API Gemini superata dopo 3 tentativi. Riprova tra qualche minuto.",
+                "error_code": "quota_exceeded",
+                "raw_text": text,
+            }
 
         if content.startswith("```json"):
             content = content[7:]
