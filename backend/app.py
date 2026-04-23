@@ -834,36 +834,38 @@ Testo del preventivo:
 
 Restituisci SOLO il JSON valido."""
 
-        client = genai.Client(api_key=api_key, http_options={'api_version': 'v1beta'})
-
+        import requests as _requests
         last_error = None
-        for model_name in ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash-8b']:
+        for api_ver, model_name in [
+            ('v1', 'gemini-1.5-flash'),
+            ('v1beta', 'gemini-2.0-flash'),
+            ('v1', 'gemini-1.5-flash-8b'),
+            ('v1beta', 'gemini-1.5-flash'),
+        ]:
+            url = f'https://generativelanguage.googleapis.com/{api_ver}/models/{model_name}:generateContent'
+            payload = {
+                'system_instruction': {'parts': [{'text': 'Sei un assistente che estrae informazioni strutturate da preventivi. Restituisci SEMPRE e SOLO JSON valido, senza testo aggiuntivo.'}]},
+                'contents': [{'parts': [{'text': prompt}]}],
+            }
             try:
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                    config=genai_types.GenerateContentConfig(
-                        system_instruction=(
-                            "Sei un assistente che estrae informazioni strutturate da preventivi. "
-                            "Restituisci SEMPRE e SOLO JSON valido, senza testo aggiuntivo."
-                        ),
-                    ),
-                )
-                content = response.text.strip()
-                print(f"✅ Estrazione con {model_name} completata")
-                last_error = None
-                break
-            except Exception as e:
-                error_str = str(e)
-                last_error = error_str
-                print(f"⚠️ {model_name} fallito: {error_str[:100]}")
-                if "429" in error_str or "quota" in error_str.lower() or "404" in error_str:
-                    continue  # prova il modello successivo
+                resp = _requests.post(url, params={'key': api_key}, json=payload, timeout=55)
+                if resp.status_code == 200:
+                    rj = resp.json()
+                    content = rj['candidates'][0]['content']['parts'][0]['text'].strip()
+                    print(f"✅ Estrazione con {api_ver}/{model_name} completata")
+                    last_error = None
+                    break
                 else:
-                    return {"error": f"Errore Gemini: {error_str}", "raw_text": text}
+                    last_error = f"{resp.status_code} {resp.text[:150]}"
+                    print(f"⚠️ {api_ver}/{model_name}: {last_error}")
+                    continue
+            except Exception as e:
+                last_error = str(e)
+                print(f"⚠️ {api_ver}/{model_name} eccezione: {last_error[:100]}")
+                continue
         if last_error:
             return {
-                "error": f"Tutti i modelli Gemini hanno fallito. Ultimo errore: {last_error[:200]}",
+                "error": f"Tutti i modelli Gemini hanno fallito. Ultimo errore: {last_error[:300]}",
                 "error_code": "quota_exceeded",
                 "raw_text": text,
             }
