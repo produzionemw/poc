@@ -834,13 +834,13 @@ Testo del preventivo:
 
 Restituisci SOLO il JSON valido."""
 
-        client = genai.Client(api_key=api_key)
+        client = genai.Client(api_key=api_key, http_options={'api_version': 'v1beta'})
 
         last_error = None
-        for attempt in range(3):
+        for model_name in ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash-8b']:
             try:
                 response = client.models.generate_content(
-                    model='gemini-2.0-flash',
+                    model=model_name,
                     contents=prompt,
                     config=genai_types.GenerateContentConfig(
                         system_instruction=(
@@ -850,22 +850,20 @@ Restituisci SOLO il JSON valido."""
                     ),
                 )
                 content = response.text.strip()
-                print("✅ Estrazione con Gemini completata")
+                print(f"✅ Estrazione con {model_name} completata")
                 last_error = None
                 break
             except Exception as e:
                 error_str = str(e)
                 last_error = error_str
-                if "429" in error_str or "quota" in error_str.lower():
-                    wait = 20 * (attempt + 1)
-                    print(f"⏳ Quota Gemini superata, attendo {wait}s (tentativo {attempt+1}/3)...")
-                    import time as _time
-                    _time.sleep(wait)
+                print(f"⚠️ {model_name} fallito: {error_str[:100]}")
+                if "429" in error_str or "quota" in error_str.lower() or "404" in error_str:
+                    continue  # prova il modello successivo
                 else:
                     return {"error": f"Errore Gemini: {error_str}", "raw_text": text}
         if last_error:
             return {
-                "error": "Quota API Gemini superata dopo 3 tentativi. Riprova tra qualche minuto.",
+                "error": f"Tutti i modelli Gemini hanno fallito. Ultimo errore: {last_error[:200]}",
                 "error_code": "quota_exceeded",
                 "raw_text": text,
             }
