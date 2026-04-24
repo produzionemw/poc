@@ -1917,5 +1917,50 @@ def offerta_commessa_mapping_stats():
     return jsonify({'rows': n}), 200
 
 
+@app.route('/api/admin/re-extract', methods=['POST'])
+def admin_re_extract():
+    """Ri-esegue l'estrazione AI su tutti i preventivi usando il raw_text già in DB."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT id, filename, raw_text FROM preventivi WHERE raw_text IS NOT NULL AND raw_text != %s', ('',))
+        rows = cursor.fetchall()
+        conn.close()
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+    results = []
+    for row in rows:
+        pid = row['id']
+        fname = row['filename']
+        raw = row['raw_text']
+        if not raw or not raw.strip():
+            results.append({'id': pid, 'filename': fname, 'status': 'skip', 'reason': 'no raw_text'})
+            continue
+        try:
+            new_info = extract_info_with_gemini(raw)
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                'UPDATE preventivi SET extracted_info = %s, updated_at = %s WHERE id = %s',
+                (json.dumps(new_info, ensure_ascii=False), datetime.now().isoformat(), pid)
+            )
+            # Invalida cache AF per questo preventivo
+            cursor.execute(
+                'DELETE FROM fattore_af_cache WHERE preventivo_id = %s',
+                (pid,)
+            )
+            conn.commit()
+            conn.close()
+            dims = _extract_dims(new_info)
+            results.append({'id': pid, 'filename': fname, 'status': 'ok', 'dims_found': dims is not None})
+        except Exception as e:
+            results.append({'id': pid, 'filename': fname, 'status': 'error', 'reason': str(e)})
+
+    ok = sum(1 for r in results if r['status'] == 'ok')
+    dims_ok = sum(1 for r in results if r.get('dims_found'))
+    return jsonify({'total': len(results), 'ok': ok, 'dims_found': dims_ok, 'detail': results}), 200
+
+
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
