@@ -31,7 +31,7 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth]);
 
-  const loadPreventivi = async () => {
+  const loadPreventivi = async (attempt = 0) => {
     try {
       const response = await fetch(`${API_BASE}/api/preventivi`);
       const data = await response.json();
@@ -39,7 +39,13 @@ function App() {
         setPreventivi(data.preventivi);
       }
     } catch (error) {
-      console.error('Errore nel caricamento preventivi:', error);
+      if (attempt < 4) {
+        const delay = [5000, 10000, 20000, 30000][attempt];
+        console.log(`Backend in avvio, ritento tra ${delay/1000}s...`);
+        setTimeout(() => loadPreventivi(attempt + 1), delay);
+      } else {
+        console.error('Backend non raggiungibile dopo 4 tentativi');
+      }
     }
   };
 
