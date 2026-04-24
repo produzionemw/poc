@@ -788,17 +788,39 @@ def extract_info_with_gemini(text, pdf_path=None):
 
     text_limited = text[:80000] if len(text) > 80000 else text
 
-    prompt = f"""Estrai tutte le informazioni rilevanti da questo preventivo e restituiscile in formato JSON valido.
+    prompt = f"""Estrai le informazioni da questo preventivo e restituiscile ESATTAMENTE in questo schema JSON.
 
-REGOLE STRETTE PER IL JSON:
-1. Usa SOLO virgolette doppie (") per le stringhe
-2. Aggiungi SEMPRE una virgola tra coppie chiave-valore, tranne l'ultima prima di }}
-3. Non usare virgole finali (trailing commas) prima di }} o ]
-4. Se un campo non è presente, usa null
-5. Restituisci SOLO il JSON, senza markdown, senza testo prima o dopo
+SCHEMA OBBLIGATORIO (usa SEMPRE queste chiavi esatte, null se assente):
+{{
+  "cliente": "nome azienda cliente",
+  "numero_preventivo": "codice/numero",
+  "data": "data preventivo",
+  "modello": "modello struttura (es. F1, DISCOVERY, ecc.)",
+  "descrizione": "descrizione lavori",
+  "peso_stimato": {{
+    "struttura_kg": <numero kg struttura metallica, SOLO il numero>,
+    "totale_kg": <peso totale kg, SOLO il numero>
+  }},
+  "caratteristiche_dimensioni": {{
+    "dimensioni_in_pianta_mm": {{
+      "lunghezza": <numero mm>,
+      "larghezza": <numero mm>
+    }},
+    "altezza_totale_struttura_mm": <numero mm altezza totale>,
+    "numero_fermate": <numero intero>,
+    "portata_kg": <numero kg portata cabina>,
+    "corsa_mm": <numero mm corsa totale>
+  }},
+  "materiali": "descrizione materiali",
+  "prezzo_totale": <numero euro senza simbolo>,
+  "note": "note aggiuntive"
+}}
 
-Cerca: cliente, data, numero preventivo, modello struttura, descrizione lavori,
-caratteristiche e dimensioni, materiali, prezzi, condizioni, note.
+REGOLE:
+- Usa SOLO virgolette doppie
+- Valori numerici senza unità di misura (es. 4500 non "4500 mm")
+- Se dimensioni in pianta sono scritte come "1470 x 1630 mm", metti lunghezza=1470 larghezza=1630
+- Restituisci SOLO il JSON, zero testo aggiuntivo, zero markdown
 
 Testo del preventivo:
 {text_limited}
