@@ -463,7 +463,8 @@ def train(xlsx_path: str | None = None, df: pd.DataFrame | None = None):
             )
 
         model_t = RandomForestRegressor(
-            n_estimators=200, random_state=42, n_jobs=-1
+            n_estimators=50, max_depth=12, min_samples_leaf=2,
+            random_state=42, n_jobs=1
         )
         model_t.fit(X_train, y_train)
         y_pred = model_t.predict(X_test)
