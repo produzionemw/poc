@@ -425,9 +425,13 @@ def _extract_dims(info):
 def _ml_metrics_fingerprint():
     """Cambia dopo ogni training: invalida cache AF senza ricalcolare tutto a mano."""
     p = os.path.join(base_dir, 'ml_metrics.json')
-    if not os.path.isfile(p):
-        return 'no_metrics'
-    return str(int(os.path.getmtime(p)))
+    if os.path.isfile(p):
+        return str(int(os.path.getmtime(p)))
+    # modello legacy presente: fingerprint basato sul suo mtime (diverso da 'no_metrics')
+    legacy = os.path.join(base_dir, 'ml_artifacts', 'model.joblib')
+    if os.path.isfile(legacy):
+        return 'legacy:' + str(int(os.path.getmtime(legacy)))
+    return 'no_model'
 
 
 def _dims_fingerprint(dims, raw_extracted):
