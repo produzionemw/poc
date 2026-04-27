@@ -129,6 +129,10 @@ def load_model():
     """Carica il modello singolo (OreImb) salvato. Ritorna None se non esiste."""
     if os.path.exists(MODEL_PATH):
         return joblib.load(MODEL_PATH)
+    # fallback al percorso legacy ml_artifacts/model.joblib
+    legacy = os.path.join(BASE_DIR, "ml_artifacts", "model.joblib")
+    if os.path.exists(legacy):
+        return joblib.load(legacy)
     return None
 
 
