@@ -225,12 +225,7 @@ _ML_METRICS = load_metrics()
 if _ML_MODEL is not None and _ML_METRICS is not None:
     print(f"OK: Modello ML caricato. R²={_ML_METRICS.get('r2', '?')}")
 else:
-    print("Modello ML non trovato — avvio training automatico in background...")
-    def _auto_train():
-        import time
-        time.sleep(3)  # aspetta che il server sia pronto
-        _start_ml_training('merge')
-    threading.Thread(target=_auto_train, daemon=True).start()
+    print("ATTENZIONE: Modello ML non trovato. Cliccare 'Elimina modelli e ritraina' nell'app.")
 
 _training_lock = threading.Lock()
 _training_running = False
