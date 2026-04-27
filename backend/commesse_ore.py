@@ -49,6 +49,7 @@ def default_xlsx_path() -> str:
         os.path.join(root, "dati", "ORE PER REPARTO PER COMMESSA commesse 25.xlsm"),
         os.path.join(root, "dati", "ORE_PER_REPARTO_commesse_25_Elaborato.csv"),
         os.path.join(root, "ORE PER REPARTO PER COMMESSA commesse 25.xlsm"),
+        os.path.join(root, "Copia di ORE PER REPARTO PER COMMESSA commesse 25.xlsm"),
     ]
     for p in candidates:
         if os.path.isfile(p):

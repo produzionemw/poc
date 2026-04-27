@@ -38,8 +38,10 @@ def find_richest_commesse_elaborato(repo_root: str) -> tuple[str | None, int]:
     candidates: list[str] = []
     for pat in (
         "ORE PER REPARTO PER COMMESSA commesse *.xlsm",
+        "*ORE PER REPARTO*.xlsm",
         "*commesse*commesse*.xlsm",
         os.path.join("dati", "ORE PER REPARTO PER COMMESSA commesse *.xlsm"),
+        os.path.join("dati", "*ORE PER REPARTO*.xlsm"),
         os.path.join("dati", "*commesse*.xlsm"),
         os.path.join("dati", "ORE_PER_REPARTO_*_Elaborato.csv"),
         os.path.join("dati", "*Elaborato*.csv"),
