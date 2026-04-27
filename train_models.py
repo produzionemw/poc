@@ -37,7 +37,13 @@ def main() -> int:
     ml = os.path.join(backend, "ml_model.py")
 
     legacy = os.path.join(root, "dati", "Estrazione fattore k (1).xlsx")
-    commesse = os.path.join(root, "ORE PER REPARTO PER COMMESSA commesse 25.xlsm")
+    _ore_candidates = [
+        os.path.join(root, "dati", "ORE PER REPARTO PER COMMESSA commesse 25.xlsm"),
+        os.path.join(root, "dati", "ORE_PER_REPARTO_commesse_25_Elaborato.csv"),
+        os.path.join(root, "ORE PER REPARTO PER COMMESSA commesse 25.xlsm"),
+        os.path.join(root, "Copia di ORE PER REPARTO PER COMMESSA commesse 25.xlsm"),
+    ]
+    commesse = next((p for p in _ore_candidates if os.path.isfile(p)), _ore_candidates[0])
     db = os.path.join(backend, "preventivi.db")
 
     p = argparse.ArgumentParser(description="Addestra i modelli ML (MetalWorkingPOC)")

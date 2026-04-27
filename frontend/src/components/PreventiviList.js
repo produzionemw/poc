@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { API_BASE } from '../apiConfig';
 import './PreventiviList.css';
 
 function buildSearchHaystack(preventivo) {
@@ -23,6 +24,7 @@ function PreventiviList({ preventivi, onPreventivoSelect, selectedId }) {
     if (showModal && selectedPreventivo) {
       loadFullPreventivo(selectedPreventivo.id);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showModal, selectedPreventivo]);
 
   const filteredPreventivi = useMemo(() => {
@@ -38,7 +40,7 @@ function PreventiviList({ preventivi, onPreventivoSelect, selectedId }) {
   const loadFullPreventivo = async (preventivoId) => {
     setLoadingDetails(true);
     try {
-      const response = await fetch(`/api/preventivi/${preventivoId}`);
+      const response = await fetch(`${API_BASE}/api/preventivi/${preventivoId}`);
       const data = await response.json();
       if (data.preventivo) {
         setFullPreventivo(data.preventivo);

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import axios from 'axios';
+import { api as axios, API_BASE } from '../apiConfig';
 import {
   BarChart,
   Bar,
@@ -529,7 +529,7 @@ function ModelView() {
               <div key={c.key} className="chart-item">
                 <h4>{c.title}</h4>
                 <ChartImage
-                  src={`/api/ml/charts/${c.key}?phase=${encodeURIComponent(activePhase)}${chartBust}`}
+                  src={`${API_BASE}/api/ml/charts/${c.key}?phase=${encodeURIComponent(activePhase)}${chartBust}`}
                   alt={`${c.title} (${phaseMeta.label})`}
                 />
               </div>

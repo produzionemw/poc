@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: metalworking-poc-backend
+    runtime: python
+    rootDir: backend
+    buildCommand: apt-get install -y poppler-utils && pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 120
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: PYTHON_VERSION
+        value: 3.11.0

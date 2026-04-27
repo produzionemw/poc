@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { API_BASE } from '../apiConfig';
 import './PlanningView.css';
 
 function PlanningView() {
@@ -19,11 +20,12 @@ function PlanningView() {
     if (config.num_operatori) {
       loadPlanning();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config]);
 
   const loadPlanningConfig = async () => {
     try {
-      const response = await fetch('/api/planning/config');
+      const response = await fetch(`${API_BASE}/api/planning/config`);
       const data = await response.json();
       setConfig({
         num_operatori: data.num_operatori || 5,
@@ -40,7 +42,7 @@ function PlanningView() {
     setError(null);
     try {
       const response = await fetch(
-        `/api/planning?num_operatori=${config.num_operatori}&tempo_commessa=${config.tempo_commessa_giorni}&tempo_recupero=${config.tempo_recupero_materie_giorni}`
+        `${API_BASE}/api/planning?num_operatori=${config.num_operatori}&tempo_commessa=${config.tempo_commessa_giorni}&tempo_recupero=${config.tempo_recupero_materie_giorni}`
       );
       const data = await response.json();
       if (data.planning) {
@@ -63,7 +65,7 @@ function PlanningView() {
 
   const handleSaveConfig = async () => {
     try {
-      const response = await fetch('/api/planning/config', {
+      const response = await fetch(`${API_BASE}/api/planning/config`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

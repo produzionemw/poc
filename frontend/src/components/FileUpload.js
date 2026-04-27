@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { API_BASE } from '../apiConfig';
 import './FileUpload.css';
 
 function FileUpload({ onUploadSuccess }) {
@@ -40,12 +41,18 @@ function FileUpload({ onUploadSuccess }) {
     formData.append('file', file);
 
     try {
-      const response = await fetch('/api/upload', {
+      const response = await fetch(`${API_BASE}/api/upload`, {
         method: 'POST',
         body: formData,
       });
 
-      const data = await response.json();
+      let data;
+      try {
+        data = await response.json();
+      } catch {
+        setError(`Errore del server (HTTP ${response.status}). Riprova tra qualche secondo.`);
+        return;
+      }
 
       if (response.ok) {
         setMessage('Preventivo caricato con successo! Le informazioni sono state estratte.');
@@ -71,7 +78,7 @@ function FileUpload({ onUploadSuccess }) {
       <h2>Carica Preventivo PDF</h2>
       <p className="description">
         Carica un file PDF contenente un preventivo. Il sistema estrarrà automaticamente
-        tutte le informazioni utilizzando Claude (Anthropic).
+        tutte le informazioni utilizzando Gemini AI (Google).
       </p>
 
       <div className="upload-area">

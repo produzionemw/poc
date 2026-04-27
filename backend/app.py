@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import os
 import json
-import sqlite3
+
 import subprocess
 import sys
 import threading
@@ -23,8 +23,11 @@ import re
 import base64
 from werkzeug.utils import secure_filename
 import PyPDF2
-import anthropic
+from google import genai
+from google.genai import types as genai_types
 from dotenv import load_dotenv
+import psycopg2
+import psycopg2.extras
 from datetime import datetime, timedelta, timezone
 import uuid
 from similarity import calculate_similarity, load_config, save_config
@@ -61,42 +64,29 @@ env_path_abs = os.path.abspath(env_path)
 load_dotenv(dotenv_path=env_path_abs, override=False)
 load_dotenv(dotenv_path=os.path.join(repo_root, '.env'), override=False)
 
-anthropic_api_key = os.getenv('ANTHROPIC_API_KEY') or os.getenv('CLAUDE_API_KEY')
+gemini_api_key = os.getenv('GEMINI_API_KEY')
 
-# Fallback: parsing riga per riga (virgolette, spazi attorno a =)
-if not anthropic_api_key and os.path.exists(env_path_abs):
-    try:
-        with open(env_path_abs, 'r', encoding='utf-8-sig') as f:
-            for raw in f:
-                line = raw.strip()
-                if not line or line.startswith('#'):
-                    continue
-                if line.startswith('export '):
-                    line = line[7:].strip()
-                if '=' not in line:
-                    continue
-                key, val = line.split('=', 1)
-                key = key.strip()
-                val = val.strip().strip('"').strip("'")
-                if key in ('ANTHROPIC_API_KEY', 'CLAUDE_API_KEY') and val:
-                    anthropic_api_key = val
-                    break
-    except Exception as e:
-        print(f"Errore lettura file .env: {e}")
-
-if not anthropic_api_key:
-    anthropic_api_key = os.environ.get('ANTHROPIC_API_KEY') or os.environ.get('CLAUDE_API_KEY')
-
-if anthropic_api_key:
-    os.environ['ANTHROPIC_API_KEY'] = anthropic_api_key
-    print(f"OK: ANTHROPIC_API_KEY caricata (lunghezza: {len(anthropic_api_key)} caratteri)")
+if gemini_api_key:
+    print(f"OK: GEMINI_API_KEY caricata (lunghezza: {len(gemini_api_key)} caratteri)")
 else:
-    print("ATTENZIONE: ANTHROPIC_API_KEY non trovata (estrazione PDF disabilitata fino a configurazione)")
+    print("ATTENZIONE: GEMINI_API_KEY non trovata (estrazione PDF disabilitata fino a configurazione)")
     print(f"Percorso .env cercato: {env_path_abs}")
-    print(f"File .env esiste: {os.path.exists(env_path_abs)}")
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=False)
+
+@app.after_request
+def add_cors_headers(response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization'
+    response.headers['Access-Control-Allow-Methods'] = 'GET,POST,PUT,DELETE,OPTIONS'
+    return response
+
+@app.errorhandler(500)
+def internal_error(e):
+    response = jsonify({'error': f'Errore interno del server: {str(e)}'})
+    response.status_code = 500
+    return response
 
 # Configurazione
 UPLOAD_FOLDER = 'uploads'
@@ -114,15 +104,23 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(os.path.join(base_dir, 'ml_artifacts'), exist_ok=True)
 
-# Database SQLite
-DB_PATH = 'preventivi.db'
+# Database PostgreSQL
+DATABASE_URL = os.environ.get('DATABASE_URL', '')
+
+def get_db_connection():
+    """Ottiene una connessione al database PostgreSQL."""
+    conn = psycopg2.connect(
+        DATABASE_URL,
+        connection_factory=psycopg2.extras.RealDictConnection,
+    )
+    return conn
+
 
 def init_db():
-    """Inizializza il database SQLite"""
-    conn = sqlite3.connect(DB_PATH)
+    """Inizializza il database PostgreSQL."""
+    conn = get_db_connection()
     cursor = conn.cursor()
-    
-    # Tabella preventivi
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS preventivi (
             id TEXT PRIMARY KEY,
@@ -134,23 +132,21 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    
-    # Tabella configurazione planning
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS planning_config (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             num_operatori INTEGER DEFAULT 5,
             tempo_commessa_giorni INTEGER DEFAULT 30,
-            tempo_magazzino_giorni INTEGER DEFAULT 7,
+            tempo_recupero_materie_giorni INTEGER DEFAULT 7,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    
-    # Inserisci configurazione di default se non esiste
-    cursor.execute('SELECT COUNT(*) FROM planning_config')
-    if cursor.fetchone()[0] == 0:
+
+    cursor.execute('SELECT COUNT(*) AS cnt FROM planning_config')
+    if cursor.fetchone()['cnt'] == 0:
         cursor.execute('''
-            INSERT INTO planning_config (num_operatori, tempo_commessa_giorni, tempo_magazzino_giorni)
+            INSERT INTO planning_config (num_operatori, tempo_commessa_giorni, tempo_recupero_materie_giorni)
             VALUES (5, 30, 7)
         ''')
 
@@ -173,7 +169,7 @@ def init_db():
 
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS offerta_commessa_map (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             nr_preventivo INTEGER NOT NULL,
             nr_commessa TEXT NOT NULL,
             ragione_sociale TEXT,
@@ -196,20 +192,23 @@ def init_db():
             updated_at TEXT
         )
     ''')
-    
+
     conn.commit()
     conn.close()
-    print(f"Database inizializzato: {DB_PATH}")
+    print("Database PostgreSQL inizializzato.")
 
 
 def _migrate_preventivi_updated_at():
-    """Aggiunge updated_at (ultima modifica / estrazione) se manca; backfill da upload_date."""
-    conn = sqlite3.connect(DB_PATH)
+    """Aggiunge updated_at se manca; backfill da upload_date."""
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("PRAGMA table_info(preventivi)")
-    cols = [r[1] for r in cursor.fetchall()]
+    cursor.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_name = 'preventivi' AND table_schema = 'public'"
+    )
+    cols = [r['column_name'] for r in cursor.fetchall()]
     if "updated_at" not in cols:
-        cursor.execute("ALTER TABLE preventivi ADD COLUMN updated_at TEXT")
+        cursor.execute("ALTER TABLE preventivi ADD COLUMN IF NOT EXISTS updated_at TEXT")
     cursor.execute(
         "UPDATE preventivi SET updated_at = upload_date WHERE updated_at IS NULL OR TRIM(COALESCE(updated_at, '')) = ''"
     )
@@ -421,11 +420,6 @@ def _extract_dims(info):
     }
 
 
-def get_db_connection():
-    """Ottiene una connessione al database"""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
 
 
 def _ml_metrics_fingerprint():
@@ -456,7 +450,7 @@ def _fattore_af_cache_try_get(preventivo_id, dims_fp, model_fp):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        'SELECT dims_fingerprint, model_fingerprint, result_json FROM fattore_af_cache WHERE preventivo_id = ?',
+        'SELECT dims_fingerprint, model_fingerprint, result_json FROM fattore_af_cache WHERE preventivo_id = %s',
         (preventivo_id,),
     )
     row = cursor.fetchone()
@@ -473,9 +467,14 @@ def _fattore_af_cache_save(preventivo_id, dims_fp, model_fp, payload):
     cursor = conn.cursor()
     cursor.execute(
         '''
-        INSERT OR REPLACE INTO fattore_af_cache
+        INSERT INTO fattore_af_cache
         (preventivo_id, dims_fingerprint, model_fingerprint, result_json, updated_at)
-        VALUES (?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (preventivo_id) DO UPDATE SET
+            dims_fingerprint = EXCLUDED.dims_fingerprint,
+            model_fingerprint = EXCLUDED.model_fingerprint,
+            result_json = EXCLUDED.result_json,
+            updated_at = EXCLUDED.updated_at
         ''',
         (
             preventivo_id,
@@ -493,7 +492,7 @@ def check_preventivo_exists(filename):
     """Verifica se un preventivo con lo stesso nome esiste già"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT id, filename, upload_date FROM preventivi WHERE filename = ?', (filename,))
+    cursor.execute('SELECT id, filename, upload_date FROM preventivi WHERE filename = %s', (filename,))
     result = cursor.fetchone()
     conn.close()
     return dict(result) if result else None
@@ -548,46 +547,28 @@ def add_missing_commas(json_string, error_line, error_col):
     
     return json_string
 
-def _anthropic_message_text(message):
-    """Estrae testo dalla risposta Messages API."""
-    parts = []
-    for block in message.content:
-        if getattr(block, 'type', None) == 'text':
-            parts.append(block.text)
-    return ''.join(parts).strip()
-
-
-def ask_claude_to_fix_json(broken_json, client):
-    """Chiede a Claude di correggere un JSON malformato."""
+def ask_gemini_to_fix_json(broken_json, api_key):
+    """Chiede a Gemini di correggere un JSON malformato."""
     try:
         error_context = broken_json[:4000] if len(broken_json) > 4000 else broken_json
-
-        fix_prompt = f"""Il seguente JSON è malformato e ha errori di sintassi (probabilmente virgole mancanti o caratteri non validi). 
-
-Il tuo compito è:
-1. Identificare tutti gli errori di sintassi
-2. Correggere gli errori (aggiungi virgole mancanti, rimuovi caratteri non validi, bilancia parentesi)
-3. Restituire il JSON completo e corretto
+        fix_prompt = f"""Il seguente JSON è malformato. Correggilo e restituisci SOLO il JSON valido, senza markdown né spiegazioni.
 
 JSON da correggere:
-{error_context}
+{error_context}"""
 
-Restituisci SOLO il JSON corretto e valido, senza spiegazioni, senza markdown, senza testo aggiuntivo."""
-
-        model = "claude-3-5-haiku-20241022"
-        message = client.messages.create(
-            model=model,
-            max_tokens=4096,
-            system=(
-                "Sei un esperto nel correggere JSON malformati. Analizza il JSON, identifica gli errori "
-                "(virgole mancanti, caratteri non validi, parentesi sbilanciate) e restituisci SOLO il JSON "
-                "corretto, senza altro testo, senza markdown, senza spiegazioni."
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model='gemini-2.0-flash',
+            contents=fix_prompt,
+            config=genai_types.GenerateContentConfig(
+                system_instruction=(
+                    "Sei un esperto nel correggere JSON malformati. "
+                    "Restituisci SOLO il JSON corretto, senza markdown, senza spiegazioni."
+                ),
             ),
-            messages=[{"role": "user", "content": fix_prompt}],
         )
-        fixed_content = _anthropic_message_text(message)
-        
-        # Rimuove markdown se presente
+        fixed_content = response.text.strip()
+
         if fixed_content.startswith("```json"):
             fixed_content = fixed_content[7:]
         elif fixed_content.startswith("```"):
@@ -595,23 +576,21 @@ Restituisci SOLO il JSON corretto e valido, senza spiegazioni, senza markdown, s
         if fixed_content.endswith("```"):
             fixed_content = fixed_content[:-3]
         fixed_content = fixed_content.strip()
-        
-        # Estrae il JSON se è dentro un oggetto wrapper
+
         json_start = fixed_content.find('{')
         json_end = fixed_content.rfind('}') + 1
         if json_start != -1 and json_end > json_start:
             fixed_content = fixed_content[json_start:json_end]
-        
-        # Verifica che sia JSON valido
-        parsed = json.loads(fixed_content)  # Test parsing
-        print("✅ JSON corretto con successo da Claude")
+
+        json.loads(fixed_content)
+        print("✅ JSON corretto con successo da Gemini")
         return fixed_content
 
     except json.JSONDecodeError as e:
-        print(f"JSON corretto da Claude ancora non valido: {e}")
+        print(f"JSON corretto da Gemini ancora non valido: {e}")
         return None
     except Exception as e:
-        print(f"Errore nella correzione JSON con Claude: {e}")
+        print(f"Errore nella correzione JSON con Gemini: {e}")
         return None
 
 def repair_json(json_string):
@@ -731,19 +710,25 @@ def image_to_base64(image):
 
 
 def image_to_base64_raw_png(image):
-    """Base64 puro PNG per API Anthropic (vision)."""
+    """Base64 puro PNG (legacy)."""
     import io
     buffered = io.BytesIO()
     image.save(buffered, format="PNG")
     return base64.b64encode(buffered.getvalue()).decode()
 
 
-def extract_info_with_claude_vision(pdf_path, api_key):
-    """Estrae informazioni con Claude (vision) da PDF convertito in immagini."""
-    try:
-        client = anthropic.Anthropic(api_key=api_key)
+def _pil_to_bytes(image):
+    """Converte PIL Image in bytes PNG."""
+    import io
+    buffered = io.BytesIO()
+    image.save(buffered, format="PNG")
+    return buffered.getvalue()
 
-        print("📄 Convertendo PDF in immagini per analisi visione (Claude)...")
+
+def extract_info_with_gemini_vision(pdf_path, api_key):
+    """Estrae informazioni con Gemini (vision) da PDF convertito in immagini."""
+    try:
+        print("📄 Convertendo PDF in immagini per analisi visione (Gemini)...")
         images = pdf_to_images(pdf_path)
 
         if not images:
@@ -751,7 +736,7 @@ def extract_info_with_claude_vision(pdf_path, api_key):
             return None
 
         images_to_process = images[:3]
-        print(f"👁️  Analizzando {len(images_to_process)} pagine con Claude vision...")
+        print(f"👁️  Analizzando {len(images_to_process)} pagine con Gemini vision...")
 
         prompt = """Analizza questo preventivo e estrai tutte le informazioni rilevanti in formato JSON valido.
 
@@ -762,250 +747,177 @@ REGOLE STRETTE PER IL JSON:
 4. Se un campo non è presente, usa null
 5. Restituisci SOLO il JSON, senza markdown, senza spiegazioni
 
-Cerca informazioni come:
-- cliente (nome, indirizzo, riferimento)
-- data e numero preventivo
-- modello struttura e descrizione lavori
-- caratteristiche e dimensioni
-- materiali e verniciatura
-- prezzi (totale fornitura, varianti)
-- condizioni di vendita
-- note e dettagli aggiuntivi
+Cerca: cliente, data, numero preventivo, modello struttura, descrizione lavori,
+caratteristiche e dimensioni, materiali, prezzi, condizioni, note.
 
 Restituisci SOLO il JSON valido."""
 
-        content = []
-        for img in images_to_process:
-            b64 = image_to_base64_raw_png(img)
-            content.append({
-                "type": "image",
-                "source": {"type": "base64", "media_type": "image/png", "data": b64},
-            })
-        content.append({"type": "text", "text": prompt})
-
-        models_to_try = [
-            "claude-sonnet-4-20250514",
-            "claude-3-5-sonnet-20241022",
-            "claude-3-opus-20240229",
+        client = genai.Client(api_key=api_key)
+        content_parts = [prompt] + [
+            genai_types.Part.from_bytes(data=_pil_to_bytes(img), mime_type='image/png')
+            for img in images_to_process
         ]
-
-        for model in models_to_try:
+        for attempt in range(3):
             try:
-                message = client.messages.create(
-                    model=model,
-                    max_tokens=4096,
-                    messages=[{"role": "user", "content": content}],
+                response = client.models.generate_content(
+                    model='gemini-2.0-flash',
+                    contents=content_parts,
                 )
-                result = _anthropic_message_text(message)
-                print(f"✅ Estrazione con visione riuscita usando {model}")
-                return result
+                print("✅ Estrazione con visione Gemini riuscita")
+                return response.text
             except Exception as e:
                 error_str = str(e)
-                print(f"Errore con modello {model}: {error_str[:120]}")
-                continue
-
+                if "429" in error_str or "quota" in error_str.lower():
+                    wait = 20 * (attempt + 1)
+                    print(f"⏳ Quota Gemini Vision, attendo {wait}s (tentativo {attempt+1}/3)...")
+                    import time as _time
+                    _time.sleep(wait)
+                else:
+                    print(f"Errore visione Gemini: {e}")
+                    return None
         return None
 
     except Exception as e:
-        print(f"Errore nell'estrazione con visione Claude: {e}")
+        print(f"Errore nell'estrazione con visione Gemini: {e}")
         return None
 
-def extract_info_with_claude(text, pdf_path=None):
-    """Estrae informazioni strutturate dal testo usando Claude (Anthropic)."""
-    try:
-        api_key = (
-            os.environ.get('ANTHROPIC_API_KEY')
-            or os.getenv('ANTHROPIC_API_KEY')
-            or os.getenv('CLAUDE_API_KEY')
-        )
 
-        if not api_key:
-            return {
-                "error": (
-                    "ANTHROPIC_API_KEY mancante o vuota. In backend/.env imposta ANTHROPIC_API_KEY= "
-                    "con la chiave da https://console.anthropic.com/ (formato sk-ant-api03-...). "
-                    "Riavvia il server dopo aver salvato il file."
-                ),
-                "raw_text": text,
-            }
+def extract_info_with_gemini(text, pdf_path=None):
+    """Estrae informazioni strutturate dal testo usando Groq (primario) o Gemini (fallback)."""
+    import requests as _requests
 
-        client = anthropic.Anthropic(api_key=api_key)
+    text_limited = text[:80000] if len(text) > 80000 else text
 
-        if pdf_path:
-            print("Tentativo estrazione con visione (Claude) dal PDF...")
-            vision_result = extract_info_with_claude_vision(pdf_path, api_key)
-            if vision_result:
-                try:
-                    # Prova a parsare il JSON dalla visione
-                    parsed = json.loads(vision_result)
-                    print("✅ Estrazione con visione completata con successo!")
-                    return parsed
-                except json.JSONDecodeError as e:
-                    print(f"JSON dalla visione non valido, uso riparazione...")
-                    # Prova a riparare il JSON
-                    cleaned = repair_json(vision_result)
-                    try:
-                        return json.loads(cleaned)
-                    except:
-                        # Se fallisce, continua con il metodo testo
-                        print("Riparazione fallita, uso estrazione da testo...")
-                        pass
-            else:
-                print("Visione non disponibile, uso estrazione da testo...")
-        
-        text_limited = text[:80000] if len(text) > 80000 else text
+    prompt = f"""Estrai le informazioni da questo preventivo e restituiscile ESATTAMENTE in questo schema JSON.
 
-        prompt = f"""Estrai tutte le informazioni rilevanti da questo preventivo e restituiscile in formato JSON valido e corretto.
+SCHEMA OBBLIGATORIO (usa SEMPRE queste chiavi esatte, null se assente):
+{{
+  "cliente": "nome azienda cliente",
+  "numero_preventivo": "codice/numero",
+  "data": "data preventivo",
+  "modello": "modello struttura (es. F1, DISCOVERY, ecc.)",
+  "descrizione": "descrizione lavori",
+  "peso_stimato": {{
+    "struttura_kg": <numero kg struttura metallica, SOLO il numero>,
+    "totale_kg": <peso totale kg, SOLO il numero>
+  }},
+  "caratteristiche_dimensioni": {{
+    "dimensioni_in_pianta_mm": {{
+      "lunghezza": <numero mm>,
+      "larghezza": <numero mm>
+    }},
+    "altezza_totale_struttura_mm": <numero mm altezza totale>,
+    "numero_fermate": <numero intero>,
+    "portata_kg": <numero kg portata cabina>,
+    "corsa_mm": <numero mm corsa totale>
+  }},
+  "materiali": "descrizione materiali",
+  "prezzo_totale": <numero euro senza simbolo>,
+  "note": "note aggiuntive"
+}}
 
-REGOLE STRETTE PER IL JSON:
-1. Usa SOLO virgolette doppie (") per le stringhe, mai virgolette singole
-2. Aggiungi SEMPRE una virgola tra coppie chiave-valore, tranne l'ultima prima di }}
-3. Non usare virgole finali (trailing commas) prima di }} o ]
-4. Se un campo non è presente, usa null (non omettere il campo)
-5. Evita caratteri speciali non validi in JSON (usa solo ASCII quando possibile)
-6. Restituisci SOLO il JSON, senza markdown, senza spiegazioni, senza testo prima o dopo
-
-Cerca informazioni come:
-- cliente (nome, indirizzo, riferimento)
-- data e numero preventivo
-- modello struttura e descrizione lavori
-- caratteristiche e dimensioni
-- materiali e verniciatura
-- prezzi (totale fornitura, varianti)
-- condizioni di vendita
-- note e dettagli aggiuntivi
+REGOLE:
+- Usa SOLO virgolette doppie
+- Valori numerici senza unità di misura (es. 4500 non "4500 mm")
+- Se dimensioni in pianta sono scritte come "1470 x 1630 mm", metti lunghezza=1470 larghezza=1630
+- Restituisci SOLO il JSON, zero testo aggiuntivo, zero markdown
 
 Testo del preventivo:
 {text_limited}
 
-Restituisci SOLO il JSON valido, senza altro testo."""
+Restituisci SOLO il JSON valido."""
 
-        models_to_try = [
-            "claude-sonnet-4-20250514",
-            "claude-3-5-sonnet-20241022",
-            "claude-3-5-haiku-20241022",
-        ]
-        content = None
-        last_error = None
+    system_msg = "Sei un assistente che estrae informazioni strutturate da preventivi. Restituisci SEMPRE e SOLO JSON valido, senza testo aggiuntivo."
 
-        for model in models_to_try:
-            try:
-                message = client.messages.create(
-                    model=model,
-                    max_tokens=4096,
-                    system=(
-                        "Sei un assistente che estrae informazioni strutturate da preventivi. "
-                        "Restituisci SEMPRE e SOLO JSON valido, senza testo aggiuntivo. "
-                        "Ogni coppia chiave-valore separata da virgola, tranne l'ultima prima di }."
-                    ),
-                    messages=[{"role": "user", "content": prompt}],
-                )
-                content = _anthropic_message_text(message)
-                print(f"✅ Modello Claude utilizzato: {model}")
-                break
-            except Exception as e:
-                last_error = e
-                error_str = str(e)
-                if (
-                    "credit" in error_str.lower()
-                    or "429" in error_str
-                    or "billing" in error_str.lower()
-                    or ("rate" in error_str.lower() and "limit" in error_str.lower())
-                ):
-                    print(f"❌ Errore quota/limiti Anthropic: {error_str[:200]}")
-                    return {
-                        "error": (
-                            "Limiti o crediti API Anthropic insufficienti. "
-                            "Verifica il piano su console.anthropic.com"
-                        ),
-                        "error_code": "quota_exceeded",
-                        "raw_text": text,
-                    }
-                if "not_found" not in error_str.lower():
-                    print(f"⚠️  Modello {model} errore: {error_str[:100]}")
-                continue
-
-        if not content:
-            error_msg = str(last_error) if last_error else "Errore sconosciuto"
-            return {
-                "error": f"Nessun modello Claude disponibile. Ultimo errore: {error_msg}",
-                "raw_text": text,
-            }
-
-        content = content.strip()
-        
-        # Rimuove eventuali markdown code blocks
-        if content.startswith("```json"):
-            content = content[7:]
-        elif content.startswith("```"):
-            content = content[3:]
-        if content.endswith("```"):
-            content = content[:-3]
-        content = content.strip()
-        
-        # Prova a trovare il JSON nel contenuto (potrebbe esserci testo prima/dopo)
-        json_start = content.find('{')
-        json_end = content.rfind('}') + 1
-        
-        if json_start != -1 and json_end > json_start:
-            content = content[json_start:json_end]
-        
-        # Prova a parsare il JSON
+    # --- Tentativo 1: Groq (gratuito, senza problemi di quota) ---
+    groq_key = os.environ.get('GROQ_API_KEY')
+    if groq_key:
         try:
-            return json.loads(content)
-        except json.JSONDecodeError as e:
-            # Se il parsing fallisce, prova a pulire meglio il contenuto
-            print(f"Errore parsing JSON iniziale: {e}")
-            print(f"Posizione errore: linea {e.lineno}, colonna {e.colno}")
-            if hasattr(e, 'pos') and e.pos < len(content):
-                print(f"Contesto errore: ...{content[max(0, e.pos-50):e.pos+50]}...")
-            
-            # Prova a riparare il JSON
-            cleaned = repair_json(content)
-            
+            resp = _requests.post(
+                'https://api.groq.com/openai/v1/chat/completions',
+                headers={'Authorization': f'Bearer {groq_key}', 'Content-Type': 'application/json'},
+                json={
+                    'model': 'llama-3.3-70b-versatile',
+                    'messages': [
+                        {'role': 'system', 'content': system_msg},
+                        {'role': 'user', 'content': prompt},
+                    ],
+                    'temperature': 0.1,
+                },
+                timeout=55,
+            )
+            if resp.status_code == 200:
+                content = resp.json()['choices'][0]['message']['content'].strip()
+                print("✅ Estrazione con Groq completata")
+                # parsing JSON
+                if content.startswith("```"):
+                    content = content.split("```")[1]
+                    if content.startswith("json"):
+                        content = content[4:]
+                content = content.strip()
+                j0 = content.find('{'); j1 = content.rfind('}') + 1
+                if j0 != -1 and j1 > j0:
+                    content = content[j0:j1]
+                try:
+                    return json.loads(content)
+                except json.JSONDecodeError:
+                    cleaned = repair_json(content)
+                    try:
+                        return json.loads(cleaned)
+                    except Exception:
+                        pass
+            else:
+                print(f"⚠️ Groq errore {resp.status_code}: {resp.text[:100]}")
+        except Exception as e:
+            print(f"⚠️ Groq eccezione: {str(e)[:100]}")
+
+    # --- Tentativo 2: Gemini via REST (fallback) ---
+    gemini_key = os.environ.get('GEMINI_API_KEY') or os.getenv('GEMINI_API_KEY')
+    if gemini_key:
+        gemini_prompt = system_msg + "\n\n" + prompt
+        for api_ver, model_name in [
+            ('v1beta', 'gemini-2.0-flash'),
+            ('v1beta', 'gemini-2.0-flash-lite'),
+            ('v1', 'gemini-1.5-flash-latest'),
+            ('v1beta', 'gemini-1.5-flash-latest'),
+        ]:
             try:
-                return json.loads(cleaned)
-            except json.JSONDecodeError as e2:
-                # Ultimo tentativo: prova a usare un parser più permissivo
-                print(f"Errore parsing JSON dopo riparazione: {e2}")
-                try:
-                    # Prova a parsare solo la parte valida fino all'errore
-                    if hasattr(e2, 'pos') and e2.pos > 0:
-                        partial_json = cleaned[:e2.pos]
-                        # Chiudi le parentesi aperte
-                        open_count = partial_json.count('{') - partial_json.count('}')
-                        if open_count > 0:
-                            partial_json += '}' * open_count
+                url = f'https://generativelanguage.googleapis.com/{api_ver}/models/{model_name}:generateContent'
+                resp = _requests.post(
+                    url,
+                    params={'key': gemini_key},
+                    json={'contents': [{'parts': [{'text': gemini_prompt}]}]},
+                    timeout=50,
+                )
+                if resp.status_code == 200:
+                    content = resp.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+                    print(f"✅ Estrazione con Gemini {api_ver}/{model_name} completata")
+                    j0 = content.find('{'); j1 = content.rfind('}') + 1
+                    if j0 != -1 and j1 > j0:
+                        content = content[j0:j1]
+                    try:
+                        return json.loads(content)
+                    except json.JSONDecodeError:
+                        cleaned = repair_json(content)
                         try:
-                            return json.loads(partial_json)
-                        except:
+                            return json.loads(cleaned)
+                        except Exception:
                             pass
-                except:
-                    pass
-                
-                try:
-                    print("Tentativo correzione JSON con Claude...")
-                    corrected_json = ask_claude_to_fix_json(cleaned, client)
-                    if corrected_json:
-                        try:
-                            parsed = json.loads(corrected_json)
-                            print("✅ JSON corretto e parsato con successo!")
-                            return parsed
-                        except json.JSONDecodeError as e3:
-                            print(f"JSON corretto da Claude ancora non valido: {e3}")
-                except Exception as e3:
-                    print(f"Errore nella correzione con Claude: {e3}")
-                
-                # Se ancora fallisce, usa il fallback
-                print("Usando estrazione fallback con regex")
-                return extract_fallback_info(text, content)
-    except Exception as e:
-        print(f"Errore nell'estrazione con Claude: {e}")
-        return {"error": str(e), "raw_text": text}
+                else:
+                    print(f"⚠️ Gemini {api_ver}/{model_name}: {resp.status_code} {resp.text[:80]}")
+            except Exception as e:
+                print(f"⚠️ Gemini {api_ver}/{model_name} eccezione: {str(e)[:80]}")
+
+    return {
+        "error": "Nessun servizio AI disponibile. Imposta GROQ_API_KEY su Render (gratuito: console.groq.com).",
+        "error_code": "no_ai_service",
+        "raw_text": text,
+    }
 
 
 # Alias retro-compatibilità interna
-extract_info_with_openai = extract_info_with_claude
+extract_info_with_claude = extract_info_with_gemini
+extract_info_with_openai = extract_info_with_gemini
 
 @app.route('/')
 def index():
@@ -1047,18 +959,14 @@ def upload_file():
         # Salva il file
         filename = secure_filename(file.filename)
         
-        # Controlla se il preventivo esiste già
+        # Se il preventivo esiste già, elimina il vecchio e riprocessa
         existing = check_preventivo_exists(filename)
         if existing:
-            return jsonify({
-                'error': f'Preventivo già presente: {filename}',
-                'existing_preventivo': {
-                    'id': existing['id'],
-                    'filename': existing['filename'],
-                    'upload_date': existing['upload_date']
-                },
-                'duplicate': True
-            }), 409  # 409 Conflict
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM preventivi WHERE id = %s', (existing['id'],))
+            conn.commit()
+            conn.close()
         
         unique_filename = f"{uuid.uuid4()}_{filename}"
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
@@ -1092,7 +1000,7 @@ def upload_file():
         cursor = conn.cursor()
         cursor.execute('''
             INSERT INTO preventivi (id, filename, filepath, upload_date, extracted_info, raw_text, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
         ''', (
             preventivo['id'],
             preventivo['filename'],
@@ -1106,16 +1014,16 @@ def upload_file():
         conn.close()
         
         # Risposta estrazione Anthropic (JSON strutturato) — copia dedicata
-        anthropic_payload = {
+        gemini_payload = {
             "preventivo_id": preventivo["id"],
             "filename": preventivo["filename"],
             "saved_at": now_iso,
-            "source": "anthropic_claude",
+            "source": "gemini_ai",
             "extracted_info": extracted_info,
         }
-        anthropic_file = os.path.join(DATA_DIR, f"{preventivo['id']}_anthropic.json")
-        with open(anthropic_file, "w", encoding="utf-8") as f:
-            json.dump(anthropic_payload, f, ensure_ascii=False, indent=2)
+        gemini_file = os.path.join(DATA_DIR, f"{preventivo['id']}_gemini.json")
+        with open(gemini_file, "w", encoding="utf-8") as f:
+            json.dump(gemini_payload, f, ensure_ascii=False, indent=2)
 
         # Snapshot completo preventivo (compatibilità)
         data_file = os.path.join(DATA_DIR, f"{preventivo['id']}.json")
@@ -1333,7 +1241,7 @@ def get_fattore_af(preventivo_id):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        'SELECT extracted_info FROM preventivi WHERE id = ?',
+        'SELECT extracted_info FROM preventivi WHERE id = %s',
         (preventivo_id,),
     )
     row = cursor.fetchone()
@@ -1445,7 +1353,7 @@ def get_preventivo(preventivo_id):
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT * FROM preventivi WHERE id = ?', (preventivo_id,))
+        cursor.execute('SELECT * FROM preventivi WHERE id = %s', (preventivo_id,))
         row = cursor.fetchone()
         conn.close()
         
@@ -1476,7 +1384,7 @@ def _load_preventivo_dict_for_similarity(preventivo_id: str):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        'SELECT id, filename, upload_date, extracted_info FROM preventivi WHERE id = ?',
+        'SELECT id, filename, upload_date, extracted_info FROM preventivi WHERE id = %s',
         (preventivo_id,),
     )
     row = cursor.fetchone()
@@ -1504,7 +1412,7 @@ def get_similar_preventivi(preventivo_id):
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
-            'SELECT id FROM preventivi WHERE id != ?',
+            'SELECT id FROM preventivi WHERE id != %s',
             (preventivo_id,),
         )
         other_ids = [row['id'] for row in cursor.fetchall()]
@@ -1701,15 +1609,15 @@ def planning_config():
             
             # Aggiorna o inserisci la configurazione
             cursor.execute('''
-                UPDATE planning_config 
-                SET num_operatori = ?, tempo_commessa_giorni = ?, tempo_recupero_materie_giorni = ?, updated_at = CURRENT_TIMESTAMP
+                UPDATE planning_config
+                SET num_operatori = %s, tempo_commessa_giorni = %s, tempo_recupero_materie_giorni = %s, updated_at = CURRENT_TIMESTAMP
                 WHERE id = (SELECT id FROM planning_config ORDER BY id DESC LIMIT 1)
             ''', (num_operatori, tempo_commessa, tempo_recupero))
-            
+
             if cursor.rowcount == 0:
                 cursor.execute('''
                     INSERT INTO planning_config (num_operatori, tempo_commessa_giorni, tempo_recupero_materie_giorni)
-                    VALUES (?, ?, ?)
+                    VALUES (%s, %s, %s)
                 ''', (num_operatori, tempo_commessa, tempo_recupero))
             
             conn.commit()
@@ -1733,7 +1641,7 @@ def planning_config():
                 return jsonify({
                     'num_operatori': config_row['num_operatori'],
                     'tempo_commessa_giorni': config_row['tempo_commessa_giorni'],
-                    'tempo_recupero_materie_giorni': config_row.get('tempo_recupero_materie_giorni') or config_row.get('tempo_magazzino_giorni', 7)
+                    'tempo_recupero_materie_giorni': config_row.get('tempo_recupero_materie_giorni') or 7
                 }), 200
             else:
                 return jsonify({
@@ -1906,7 +1814,7 @@ def commesse_ore_import():
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
 
-    result = import_to_sqlite(DB_PATH, rows, path)
+    result = import_to_sqlite(None, rows, path)
     return jsonify({'success': True, **result}), 200
 
 
@@ -1932,9 +1840,10 @@ def commesse_ore_list():
 def commesse_ore_stats():
     conn = get_db_connection()
     cursor = conn.cursor()
-    n = cursor.execute('SELECT COUNT(*) FROM commesse_ore').fetchone()[0]
+    cursor.execute('SELECT COUNT(*) AS cnt FROM commesse_ore')
+    n = cursor.fetchone()['cnt']
     conn.close()
-    by_norm = rows_grouped_by_cliente_norm(DB_PATH)
+    by_norm = rows_grouped_by_cliente_norm(None)
     n_norm = len(by_norm)
     ambiguous = sum(1 for v in by_norm.values() if len(v) > 1)
     return jsonify({
@@ -1968,8 +1877,8 @@ def commesse_ore_match_preventivi():
     if not filenames:
         return jsonify({'matches': [], 'summary': empty_summary}), 200
 
-    by_norm = rows_grouped_by_cliente_norm(DB_PATH)
-    matches = match_preventivi_filenames(filenames, by_norm, DB_PATH)
+    by_norm = rows_grouped_by_cliente_norm(None)
+    matches = match_preventivi_filenames(filenames, by_norm, None)
     summary = {**empty_summary, 'preventivi': len(matches)}
     for m in matches:
         k = m.get('match')
@@ -1991,7 +1900,7 @@ def offerta_commessa_mapping_import():
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
 
-    result = import_mapping_to_sqlite(DB_PATH, rows, path)
+    result = import_mapping_to_sqlite(None, rows, path)
     return jsonify({'success': True, **result}), 200
 
 
@@ -1999,11 +1908,58 @@ def offerta_commessa_mapping_import():
 def offerta_commessa_mapping_stats():
     try:
         conn = get_db_connection()
-        n = conn.execute('SELECT COUNT(*) FROM offerta_commessa_map').fetchone()[0]
+        cursor = conn.cursor()
+        cursor.execute('SELECT COUNT(*) AS cnt FROM offerta_commessa_map')
+        n = cursor.fetchone()['cnt']
         conn.close()
-    except sqlite3.OperationalError:
+    except Exception:
         n = 0
     return jsonify({'rows': n}), 200
+
+
+@app.route('/api/admin/re-extract', methods=['POST'])
+def admin_re_extract():
+    """Ri-esegue l'estrazione AI su tutti i preventivi usando il raw_text già in DB."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT id, filename, raw_text FROM preventivi WHERE raw_text IS NOT NULL AND raw_text != %s', ('',))
+        rows = cursor.fetchall()
+        conn.close()
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+    results = []
+    for row in rows:
+        pid = row['id']
+        fname = row['filename']
+        raw = row['raw_text']
+        if not raw or not raw.strip():
+            results.append({'id': pid, 'filename': fname, 'status': 'skip', 'reason': 'no raw_text'})
+            continue
+        try:
+            new_info = extract_info_with_gemini(raw)
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                'UPDATE preventivi SET extracted_info = %s, updated_at = %s WHERE id = %s',
+                (json.dumps(new_info, ensure_ascii=False), datetime.now().isoformat(), pid)
+            )
+            # Invalida cache AF per questo preventivo
+            cursor.execute(
+                'DELETE FROM fattore_af_cache WHERE preventivo_id = %s',
+                (pid,)
+            )
+            conn.commit()
+            conn.close()
+            dims = _extract_dims(new_info)
+            results.append({'id': pid, 'filename': fname, 'status': 'ok', 'dims_found': dims is not None})
+        except Exception as e:
+            results.append({'id': pid, 'filename': fname, 'status': 'error', 'reason': str(e)})
+
+    ok = sum(1 for r in results if r['status'] == 'ok')
+    dims_ok = sum(1 for r in results if r.get('dims_found'))
+    return jsonify({'total': len(results), 'ok': ok, 'dims_found': dims_ok, 'detail': results}), 200
 
 
 if __name__ == '__main__':

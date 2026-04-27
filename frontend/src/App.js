@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
+import { API_BASE } from './apiConfig';
 import './App.css';
+import Login, { isAuthenticated } from './components/Login';
 import FileUpload from './components/FileUpload';
 import PreventiviList from './components/PreventiviList';
 import SimilarityView from './components/SimilarityView';
@@ -13,33 +15,43 @@ import FattoreKView from './components/FattoreKView';
 const SHOW_PLANNING_MENU = false;
 
 function App() {
+  const [auth, setAuth] = useState(isAuthenticated());
   const [preventivi, setPreventivi] = useState([]);
   const [selectedPreventivo, setSelectedPreventivo] = useState(null);
   const [similarPreventivi, setSimilarPreventivi] = useState([]);
   const [loading, setLoading] = useState(false);
+
   const [activeTab, setActiveTab] = useState('upload');
   const [config, setConfig] = useState(null);
 
   useEffect(() => {
+    if (!auth) return;
     loadPreventivi();
     loadConfig();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auth]);
 
-  const loadPreventivi = async () => {
+  const loadPreventivi = async (attempt = 0) => {
     try {
-      const response = await fetch('/api/preventivi');
+      const response = await fetch(`${API_BASE}/api/preventivi`);
       const data = await response.json();
       if (data.preventivi) {
         setPreventivi(data.preventivi);
       }
     } catch (error) {
-      console.error('Errore nel caricamento preventivi:', error);
+      if (attempt < 4) {
+        const delay = [5000, 10000, 20000, 30000][attempt];
+        console.log(`Backend in avvio, ritento tra ${delay/1000}s...`);
+        setTimeout(() => loadPreventivi(attempt + 1), delay);
+      } else {
+        console.error('Backend non raggiungibile dopo 4 tentativi');
+      }
     }
   };
 
   const loadConfig = async () => {
     try {
-      const response = await fetch('/api/config');
+      const response = await fetch(`${API_BASE}/api/config`);
       const data = await response.json();
       setConfig(data);
     } catch (error) {
@@ -55,7 +67,7 @@ function App() {
     setSelectedPreventivo(preventivoId);
     setLoading(true);
     try {
-      const response = await fetch(`/api/preventivi/${preventivoId}/similar`);
+      const response = await fetch(`${API_BASE}/api/preventivi/${preventivoId}/similar`);
       const data = await response.json();
       if (data.similar_preventivi) {
         setSimilarPreventivi(data.similar_preventivi);
@@ -69,7 +81,7 @@ function App() {
 
   const handleConfigUpdate = async (newConfig) => {
     try {
-      const response = await fetch('/api/config', {
+      const response = await fetch(`${API_BASE}/api/config`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -87,6 +99,8 @@ function App() {
       console.error('Errore nell\'aggiornamento configurazione:', error);
     }
   };
+
+  if (!auth) return <Login onLogin={() => setAuth(true)} />;
 
   return (
     <div className="App">

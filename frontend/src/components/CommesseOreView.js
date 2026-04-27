@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import axios from 'axios';
+import { api as axios } from '../apiConfig';
 import './CommesseOreView.css';
 
 function CommesseOreView() {

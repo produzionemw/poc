@@ -7,11 +7,20 @@ from __future__ import annotations
 
 import os
 import re
-import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
+import psycopg2
+import psycopg2.extras
+
+
+def _get_db_conn():
+    url = os.environ.get('DATABASE_URL', '')
+    conn = psycopg2.connect(url, connection_factory=psycopg2.extras.RealDictConnection)
+    return conn
+
 import openpyxl
+import pandas as pd
 
 # Colonne attese prima riga foglio "Elaborato"
 HEADER_COMM = "Nr. Commessa"
@@ -36,7 +45,16 @@ _PREV_FN = re.compile(
 
 def default_xlsx_path() -> str:
     root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    return os.path.join(root, "ORE PER REPARTO PER COMMESSA commesse 25.xlsm")
+    candidates = [
+        os.path.join(root, "dati", "ORE PER REPARTO PER COMMESSA commesse 25.xlsm"),
+        os.path.join(root, "dati", "ORE_PER_REPARTO_commesse_25_Elaborato.csv"),
+        os.path.join(root, "ORE PER REPARTO PER COMMESSA commesse 25.xlsm"),
+        os.path.join(root, "Copia di ORE PER REPARTO PER COMMESSA commesse 25.xlsm"),
+    ]
+    for p in candidates:
+        if os.path.isfile(p):
+            return p
+    return candidates[0]
 
 
 def normalize_cliente(s: str) -> str:
@@ -129,9 +147,62 @@ def _header_map(ws) -> dict[str, int]:
     return mp
 
 
+def load_rows_from_csv(path: str) -> list[dict[str, Any]]:
+    """Legge il foglio Elaborato esportato in CSV (stessa struttura dell'Excel)."""
+    df = pd.read_csv(path, encoding="utf-8-sig")
+    col_map: dict[str, str] = {}
+    for col in df.columns:
+        key = _canonical_header(col)
+        if key and key not in col_map.values():
+            col_map[col] = key
+    df = df.rename(columns=col_map)
+
+    for k in (HEADER_COMM, COL_TOT):
+        if k not in df.columns:
+            raise ValueError(f"Colonna mancante '{k}'. Trovate: {list(df.columns)}")
+
+    out: list[dict[str, Any]] = []
+    for _, row in df.iterrows():
+        nr, cliente = parse_commessa_cell(row[HEADER_COMM])
+        if not nr:
+            continue
+
+        def cell(name: str, _row=row) -> float | None:
+            if name not in df.columns:
+                return None
+            v = _row[name]
+            try:
+                if pd.isna(v):
+                    return None
+            except (TypeError, ValueError):
+                pass
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+
+        out.append(
+            {
+                "nr_commessa": nr,
+                "cliente": cliente or "",
+                "cliente_norm": normalize_cliente(cliente or ""),
+                "ore_imba": cell(COL_IMBA),
+                "ore_nest": cell(COL_NEST),
+                "ore_pieg": cell(COL_PIEG),
+                "ore_prod": cell(COL_PROD),
+                "ore_prog": cell(COL_PROG),
+                "ore_sald": cell(COL_SALD),
+                "ore_totale": cell(COL_TOT),
+            }
+        )
+    return out
+
+
 def load_rows_from_xlsx(path: str) -> list[dict[str, Any]]:
     if not os.path.isfile(path):
         raise FileNotFoundError(path)
+    if path.lower().endswith(".csv"):
+        return load_rows_from_csv(path)
 
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     if "Elaborato" not in wb.sheetnames:
@@ -189,7 +260,7 @@ def import_to_sqlite(
     rows: list[dict[str, Any]],
     source_file: str,
 ) -> dict[str, Any]:
-    conn = sqlite3.connect(db_path)
+    conn = _get_db_conn()
     cur = conn.cursor()
     cur.execute("DELETE FROM commesse_ore")
     now = datetime.now(timezone.utc).isoformat()
@@ -200,7 +271,7 @@ def import_to_sqlite(
                 nr_commessa, cliente, cliente_norm,
                 ore_imba, ore_nest, ore_pieg, ore_prod, ore_prog, ore_sald, ore_totale,
                 source_file, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 r["nr_commessa"],
@@ -218,7 +289,8 @@ def import_to_sqlite(
             ),
         )
     conn.commit()
-    n = cur.execute("SELECT COUNT(*) FROM commesse_ore").fetchone()[0]
+    cur.execute("SELECT COUNT(*) AS cnt FROM commesse_ore")
+    n = cur.fetchone()['cnt']
     conn.close()
     return {"imported": len(rows), "stored": n, "source_file": source_file}
 
@@ -415,8 +487,7 @@ def match_preventivi_filenames(
 
 
 def rows_grouped_by_cliente_norm(db_path: str) -> dict[str, list[dict[str, Any]]]:
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    conn = _get_db_conn()
     cur = conn.cursor()
     cur.execute(
         """

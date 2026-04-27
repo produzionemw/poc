@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+venv/
+.venv/
+env/
+
+# Environment
+.env
+*.env.local
+
+# ML artifacts (generated, not source)
+backend/ml_model.pkl
+backend/ml_metrics.json
+backend/ml_models/
+backend/ml_charts/
+backend/ml_artifacts/
+
+# Uploads
+backend/uploads/
+backend/data/
+
+# Database
+backend/preventivi.db
+*.sqlite3
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/
+frontend/build/

@@ -11,8 +11,16 @@ from __future__ import annotations
 import json
 import os
 import re
-import sqlite3
 from typing import Any
+
+import psycopg2
+import psycopg2.extras
+
+
+def _get_db_conn():
+    url = os.environ.get('DATABASE_URL', '')
+    conn = psycopg2.connect(url, connection_factory=psycopg2.extras.RealDictConnection)
+    return conn
 
 import numpy as np
 import pandas as pd
@@ -117,15 +125,12 @@ def build_training_frame_from_commesse_join(
     ore_rows = load_rows_from_xlsx(ore_xlsx_path)
     ore_by_comm = {r["nr_commessa"]: r for r in ore_rows}
 
-    if not os.path.isfile(db_path):
-        raise FileNotFoundError(db_path)
-
-    conn = sqlite3.connect(db_path)
+    conn = _get_db_conn()
     cur = conn.cursor()
     try:
         cur.execute("SELECT nr_preventivo, nr_commessa FROM offerta_commessa_map")
         mapping_rows = cur.fetchall()
-    except sqlite3.OperationalError:
+    except Exception:
         mapping_rows = []
     cur.execute("SELECT filename, extracted_info FROM preventivi")
     preventivi = cur.fetchall()
